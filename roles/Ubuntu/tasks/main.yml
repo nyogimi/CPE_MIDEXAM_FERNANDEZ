@@ -1,0 +1,239 @@
+# Nagios
+
+- name: Installing nagios dependecies and libraries.
+  tags: dependecies, libraries
+  apt:
+    name:
+      - autoconf
+      - gcc
+      - libc6
+      - make
+      - wget
+      - unzip
+      - apache2
+      - php
+      - libapache2-mod-php7.4
+      - libgd-dev
+      -  openssl
+      - libssl-dev
+      - autoconf
+      - gcc
+      - libc6
+      - libmcrypt-dev
+      - make
+      - libssl-dev
+      - wget
+      - bc
+      - gawk
+      - dc
+      - build-essential
+      - snmp
+      - libnet-snmp-perl
+      - gettext
+      - python3-pip
+      - python3
+    state: latest
+
+- name: Install passlib python package.
+  pip:
+    name: passlib
+
+- name: Directory for Nagios.
+  file:
+    path: ~/nagios
+    state: directory
+
+- name: Downloading Nagios and Extracting files of Nagios.
+  unarchive:
+    src: https://github.com/NagiosEnterprises/nagioscore/archive/nagios-4.4.6.tar.gz
+    dest: ~/nagios
+    remote_src: yes
+    mode: 0755
+    owner: root
+    group: root
+
+- name: Setting up Nagios Which is Compiling, installing, and creating users and group.
+  shell: |
+    cd ~/nagios/nagioscore-*
+    sudo ./configure --with-httpd-conf=/etc/apache2/sites-enabled
+    sudo make all
+    sudo make install-groups-users
+    sudo usermod -a -G nagios www-data
+    sudo make install
+    sudo make install-daemoninit
+    sudo make install-commandmode
+    sudo make install-config
+    sudo make install-webconf
+    sudo a2enmod rewrite
+    sudo a2enmod cgi
+- name: Downloading nagios plugins and extracting its file.
+  unarchive:
+    src: https://github.com/nagios-plugins/nagios-plugins/archive/release-2.3.3.tar.gz
+    dest: ~/nagios
+    remote_src: yes
+    mode: 0755
+    owner: root
+    group: root
+
+- name: Changing Directories and Compiling. Also, installing nagios plugins.
+  shell: |
+    cd ~/nagios/nagios-plugins*
+    ./tools/setup
+    ./configure
+    make
+    make install
+- name: Creating user and password. Also, ensuring permissions are set.
+  community.general.htpasswd:
+    path: /usr/local/nagios/etc/htpasswd.users
+    name: admin
+    password: junemmq
+
+- name: Starting Nagios and enabled it.
+  service:
+    name: nagios
+    state: restarted
+    enabled: true
+
+- name: Starting httpd and enabled it.
+  service:
+    name: apache2
+    state: restarted
+    enabled: true
+
+
+# Prometheus
+
+- name: Making Directory for download files
+  file:
+    path: ~/prometheus
+    state: directory
+
+- name: Download/Extract Prometheus Files
+  unarchive:
+    src: "{{source}}"
+    dest: ~/prometheus
+    remote_src: yes
+    mode: 0777
+    owner: root
+    group: root
+
+- name: Prometheus executables files added
+  shell: |
+    cd ~/prometheus/prometheus*
+    cp -r . /usr/local/bin/prometheus
+- name: Prometheus service file copy
+  copy:
+    src: prometheus.service
+    dest: /etc/systemd/system
+    mode: 777
+    owner: root
+    group: root
+
+- name: Verifying the Prometheus
+  service:
+    name: prometheus
+    state: restarted
+    enabled: true
+
+
+# Elasticsearch
+
+- name: Add Elasticsearch apt key
+  apt_key:
+   url: "https://packages.elastic.co/GPG-KEY-elasticsearch"
+   state: present
+
+- name: Install APT repository
+  apt:
+    name: apt-transport-https
+    state: present
+
+- name: Adding Elasticsearch repo
+  apt_repository:
+   repo: deb https://artifacts.elastic.co/packages/7.x/apt stable main
+   state: present
+
+- name: Install Elasticsearch
+  apt:
+   name: elasticsearch
+   update_cache: yes
+
+- name: Updating the config file to allow outside access
+  lineinfile:
+   destfile: /etc/elasticsearch/elasticsearch.yml
+   regexp: 'network.host:'
+   line: 'network.host: 0.0.0.0'
+
+- name: Updating the port in config file
+  lineinfile:
+   destfile: /etc/elasticsearch/elasticsearch.yml
+   regexp: 'http.port:'
+   line: 'http.port: 9200'
+
+- name: Updating the config file to allow outside access
+  lineinfile:
+   destfile: /etc/elasticsearch/elasticsearch.yml
+   regexp: 'cluster.initial_master_nodes:'
+   line: 'cluster.initial_master_nodes: ["{{ ansible_default_ipv4.address }}"]'
+
+- name: Starting Elasticsearch
+  service:
+   name: elasticsearch
+   state: started
+
+
+# LAMP
+
+- name: Installing Packages
+  package:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - apache2
+    - mysql-server
+    - php
+    - libapache2-mod-php
+    - php-mysql
+    - python3-pymysql
+
+- name: Set root password
+  no_log: true
+  community.mysql.mysql_user:
+    name: root
+    password: junemmq
+    login_unix_socket: /var/run/mysqld/mysqld.sock
+
+- name: Copy .my.cnf for easier mysql automation
+  blockinfile:
+    path: ~/.my.cnf
+    create: yes
+    block: |
+      [client]
+      user=root
+      password=junemmq
+
+- name: Removes test database
+  no_log: true
+  community.mysql.mysql_db:
+    name: test
+    state: absent
+
+- name: Prohibit Remote Root login
+  no_log: true
+  community.mysql.mysql_query:
+    login_db: mysql
+    query: "{{ item }}"
+  with_items:
+    - DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
+    - FLUSH PRIVILEGES;
+
+- name: Configure apache2
+  lineinfile:
+    path: /etc/apache2/mods-enabled/dir.conf
+    regexp: "^\tDirectoryIndex index.html index.cgi index.pl index.php index.xhtml index.htm$"
+    line: "\tDirectoryIndex index.php index.html index.cgi index.pl index.php index.xhtml index.htm"
+
+- name: Restart Apache2
+  service:
+    name: apache2
+    state: restarted
